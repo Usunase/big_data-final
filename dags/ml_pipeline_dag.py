@@ -1,9 +1,18 @@
 """
 Airflow DAG để điều khiển toàn bộ ML pipeline
+Tương thích với Airflow 3.1.3
+ĐÃ SỬA: Gửi dữ liệu vào Kafka TRƯỚC KHI khởi động Spark Streaming
 """
 from airflow import DAG
-from airflow.operators.bash import BashOperator
-from airflow.operators.python import PythonOperator
+# Airflow 3.x: Sử dụng providers.standard thay vì operators cũ
+try:
+    from airflow.providers.standard.operators.bash import BashOperator
+    from airflow.providers.standard.operators.python import PythonOperator
+except ImportError:
+    # Fallback cho Airflow 2.x
+    from airflow.operators.bash import BashOperator
+    from airflow.operators.python import PythonOperator
+
 from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
 from datetime import datetime, timedelta
 import time
@@ -103,7 +112,7 @@ with DAG(
         bash_command="""
         cd {{ params.project_dir }} && \
         spark-submit \
-            --master spark://192.168.1.19:7077 \
+            --master spark://192.168.80.207:7077 \
             --conf spark.hadoop.fs.defaultFS=file:/// \
             --conf spark.local.dir=/tmp/spark_local \
             --driver-memory 4g \
@@ -115,13 +124,24 @@ with DAG(
         params={'project_dir': '/home/haminhchien/Documents/bigdata/final_project'}
     )
     
-    # Task 5: Khởi động Spark Streaming job (background)
+    # Task 5: Gửi dữ liệu streaming vào Kafka (ĐÃ SỬA: Chuyển lên trước)
+    send_streaming_data = BashOperator(
+        task_id='send_streaming_data',
+        bash_command="""
+        cd {{ params.project_dir }} && \
+        echo "📤 Đang gửi dữ liệu streaming vào Kafka..." && \
+        python streaming/kafka_producer.py 1 200
+        """,
+        params={'project_dir': '/home/haminhchien/Documents/bigdata/final_project'}
+    )
+    
+    # Task 6: Khởi động Spark Streaming job (ĐÃ SỬA: Chuyển xuống sau)
     start_streaming_job = BashOperator(
         task_id='start_streaming_job',
         bash_command="""
         cd {{ params.project_dir }} && \
         nohup spark-submit \
-            --master spark://192.168.1.19:7077 \
+            --master spark://192.168.80.207:7077 \
             --packages org.apache.spark:spark-sql-kafka-0-10_2.13:4.0.0 \
             --driver-memory 4g \
             --executor-memory 4g \
@@ -131,17 +151,6 @@ with DAG(
         echo $! > /tmp/spark_streaming.pid
         echo "✓ Đã khởi động Spark Streaming job (PID: $(cat /tmp/spark_streaming.pid))"
         sleep 20
-        """,
-        params={'project_dir': '/home/haminhchien/Documents/bigdata/final_project'}
-    )
-    
-    # Task 6: Gửi dữ liệu streaming vào Kafka
-    send_streaming_data = BashOperator(
-        task_id='send_streaming_data',
-        bash_command="""
-        cd {{ params.project_dir }} && \
-        echo "📤 Đang gửi dữ liệu streaming vào Kafka..." && \
-        python streaming/kafka_producer.py 1 200
         """,
         params={'project_dir': '/home/haminhchien/Documents/bigdata/final_project'}
     )
@@ -167,8 +176,9 @@ with DAG(
         trigger_rule='all_done'  # Chạy dù task trước thành công hay thất bại
     )
     
-    # Định nghĩa thứ tự thực thi
-    start_kafka >> check_kafka >> prepare_data >> train_model >> start_streaming_job >> send_streaming_data >> wait_processing >> cleanup
+    # ĐÃ SỬA: Định nghĩa thứ tự thực thi mới
+    # Dữ liệu được gửi vào Kafka TRƯỚC, sau đó mới khởi động Streaming job để xử lý
+    start_kafka >> check_kafka >> prepare_data >> train_model >> send_streaming_data >> start_streaming_job >> wait_processing >> cleanup
 
 
 # DAG riêng để chạy visualization

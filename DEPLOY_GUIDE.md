@@ -1,6 +1,22 @@
 # Hướng dẫn triển khai demo tối thiểu 3 máy (Spark / Kafka / Airflow + Producer)
 
 ## 1. Kiến trúc và vai trò
+
+### Bảng 3.1.3: Phân bổ vai trò và IP các máy
+
+| Máy | Vai trò | IP Ví dụ | Ports cần mở | Services |
+|-----|---------|----------|--------------|----------|
+| **Máy 1** | Spark Master + Workers | `192.168.1.19` | 7077 (Spark), 8080 (UI) | Spark Master, Spark Workers |
+| **Máy 2** | Kafka + Zookeeper | `192.168.1.20` | 9092 (Kafka), 2181 (ZK) | Kafka Broker, Zookeeper |
+| **Máy 3** | Airflow + Producer | `192.168.1.21` | 8080 (Airflow UI) | Airflow Webserver, Scheduler, Producer |
+| **Máy Demo** | Visualization (tùy chọn) | `192.168.1.22` | - | Consumer, Visualization |
+
+**Lưu ý:**
+- Máy 3 có thể kiêm luôn vai trò Producer và Demo
+- IP trên chỉ là ví dụ, bạn cần thay bằng IP thực tế của các máy
+- Đảm bảo các máy có thể ping và kết nối với nhau
+
+### Chi tiết vai trò:
 - **Máy Spark**: Spark Master + Workers, chạy train & streaming predict. Ví dụ IP: `192.168.x.S`.
 - **Máy Kafka**: Kafka + Zookeeper (docker-compose). Ví dụ IP: `192.168.x.K`.
 - **Máy Airflow**: Airflow scheduler + webserver; trigger DAG, chạy producer/consumer (có thể trùng máy demo).

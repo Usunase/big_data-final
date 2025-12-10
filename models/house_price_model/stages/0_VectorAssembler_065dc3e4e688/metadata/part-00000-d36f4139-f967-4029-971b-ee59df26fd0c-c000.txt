@@ -1,1 +1,0 @@
-{"class":"org.apache.spark.ml.feature.VectorAssembler","timestamp":1765289220271,"sparkVersion":"4.0.0","uid":"VectorAssembler_065dc3e4e688","paramMap":{"inputCols":["MedInc","HouseAge","AveRooms","AveBedrms","Population","AveOccup","Latitude","Longitude"],"outputCol":"features"},"defaultParamMap":{"handleInvalid":"error","outputCol":"VectorAssembler_065dc3e4e688__output"}}

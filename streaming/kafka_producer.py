@@ -13,7 +13,7 @@ def create_producer(max_retries=10):
     for i in range(max_retries):
         try:
             producer = KafkaProducer(
-                bootstrap_servers=['localhost:9092'],
+                bootstrap_servers=['192.168.80.127:9092'],
                 value_serializer=lambda x: json.dumps(x).encode('utf-8'),
                 api_version=(2, 5, 0)
             )
