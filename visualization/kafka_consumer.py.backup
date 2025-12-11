@@ -22,13 +22,11 @@ class RealtimeVisualizer:
         self.fig.suptitle('Real-time House Price Prediction', fontsize=16, fontweight='bold')
         
         # Setup consumer
-        # Đọc từ đầu để đảm bảo thấy dữ liệu cả khi consumer khởi động muộn
         self.consumer = KafkaConsumer(
             'house-prices-output',
             bootstrap_servers=['192.168.80.127:9092'],
-            group_id='viz-consumer',          # cố định group để không bỏ lỡ offset
-            auto_offset_reset='earliest',     # nếu chưa có offset, đọc từ đầu
-            enable_auto_commit=True,          # commit để lần sau tiếp tục từ vị trí mới
+            auto_offset_reset='latest',
+            enable_auto_commit=True,
             value_deserializer=lambda x: json.loads(x.decode('utf-8'))
         )
         
@@ -42,9 +40,6 @@ class RealtimeVisualizer:
     def consume_messages(self, timeout_ms=100):
         """Đọc message từ Kafka"""
         messages = self.consumer.poll(timeout_ms=timeout_ms)
-        
-        if not messages:
-            print("⏳ Chưa nhận được bản ghi nào từ Kafka (waiting)...")
         
         for topic_partition, records in messages.items():
             for record in records:
