@@ -54,13 +54,15 @@ def streaming_prediction():
     
     # Đọc dữ liệu từ Kafka
     print("📥 Đang kết nối đến Kafka topic: house-prices-input")
-    df_stream = spark \
-        .readStream \
-        .format("kafka") \
-        .option("kafka.bootstrap.servers", "192.168.80.127:9092") \
-        .option("subscribe", "house-prices-input") \
-        .option("startingOffsets", "earliest") \
+    df_stream = (
+        spark.readStream
+        .format("kafka")
+        .option("kafka.bootstrap.servers", "192.168.80.127:9092")
+        .option("subscribe", "house-prices-input")
+        .option("startingOffsets", "earliest")
+        .option("failOnDataLoss", "false")  # không fail nếu offset bị lùi/reset
         .load()
+    )
     
     # Parse JSON
     df_parsed = df_stream.select(
@@ -85,13 +87,14 @@ def streaming_prediction():
     )
     
     # Ghi kết quả vào Kafka topic mới
-    query = kafka_output \
-        .writeStream \
-        .format("kafka") \
-        .option("kafka.bootstrap.servers", "192.168.80.127:9092") \
-        .option("topic", "house-prices-output") \
-        .option("checkpointLocation", "/tmp/checkpoint") \
+    query = (
+        kafka_output.writeStream
+        .format("kafka")
+        .option("kafka.bootstrap.servers", "192.168.80.127:9092")
+        .option("topic", "house-prices-output")
+        .option("checkpointLocation", "/tmp/checkpoint-house-prices-output")
         .start()
+    )
     
     # Console output để debug
     console_query = result \
