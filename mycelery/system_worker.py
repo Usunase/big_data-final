@@ -24,10 +24,10 @@ app.conf.update(
 # Định nghĩa các node trong cluster
 CLUSTER_NODES = {
     'spark-master': {'host': '192.168.80.207', 'queue': 'spark'},
-    'spark-worker': {'host': '192.168.80.207', 'queue': 'spark_worker'},
-    'hadoop-namenode': {'host': '192.168.80.127', 'queue': 'namenode'},
-    'hadoop-datanode': {'host': '192.168.80.127', 'queue': 'datanode'},
-    'kafka': {'host': '192.168.80.127', 'queue': 'kafka'},
+    'spark-worker': {'host': '192.168.80.207', 'queue': 'spark'},
+    'hadoop-namenode': {'host': '192.168.80.127', 'queue': 'node_57'},
+    'hadoop-datanode': {'host': '192.168.80.127', 'queue': 'node_57'},
+    'kafka': {'host': '192.168.80.127', 'queue': 'node_57'},
 }
 
 @app.task(bind=True)
