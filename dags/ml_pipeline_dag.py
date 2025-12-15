@@ -171,31 +171,31 @@ with DAG(
 BIGDATA_SERVICES = {
     'spark-master': {
         'host': '192.168.80.207',
-        'queue': 'spark_queue',
+        'queue': 'spark',
         'path': '~/bd/spark/docker-compose.yml',
         'service': 'spark-master',
     },
     'spark-worker': {
         'host': '192.168.80.207',
-        'queue': 'spark_queue',
+        'queue': 'spark_worker',
         'path': '~/bd/spark/docker-compose.yml',
         'service': 'spark-worker',
     },
     'hadoop-namenode': {
         'host': '192.168.80.148',
-        'queue': 'system',
+        'queue': 'namenode',
         'path': '~/bd/hadoop/docker-compose.namenode.yml',
         'service': None,
     },
     'hadoop-datanode': {
         'host': '192.168.80.148',
-        'queue': 'system',
+        'queue': 'datanode',
         'path': '~/bd/hadoop/docker-compose.datanode.yml',
         'service': None,
     },
     'kafka': {
         'host': '192.168.80.127',
-        'queue': 'kafka_queue',
+        'queue': 'kafka',
         'path': '~/kafka-cluster/docker-compose.yml',
         'service': None,
     },
@@ -273,7 +273,7 @@ with DAG(
             return {'skipped': True}
 
         command = "sh ~/bd/fp_pr_tasks/credit_card/exes/prepare.sh"
-        queue = 'spark_queue'
+        queue = 'spark'
         host = '192.168.80.207'
 
         env_vars = {
@@ -304,7 +304,7 @@ with DAG(
             return {'skipped': True}
 
         command = "sh ~/bd/fp_pr_tasks/credit_card/exes/train.sh"
-        queue = 'spark_queue'
+        queue = 'spark'
         host = '192.168.80.207'
 
         env_vars = {
@@ -335,7 +335,7 @@ with DAG(
             return {'skipped': True}
 
         command = 'sh ~/bd/fp_pr_tasks/credit_card/exes/producer.sh'
-        queue = 'spark_queue'
+        queue = 'spark'
         host = '192.168.80.207'
 
         env_vars = {
@@ -366,7 +366,7 @@ with DAG(
             return {'skipped': True}
 
         command = 'sh ~/bd/fp_pr_tasks/credit_card/exes/predict.sh'
-        queue = 'spark_queue'
+        queue = 'spark'
         host = '192.168.80.207'
 
         env_vars = {
