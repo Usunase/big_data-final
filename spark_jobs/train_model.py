@@ -1,5 +1,6 @@
 """
 Spark ML job để huấn luyện mô hình Random Forest
+Đọc dữ liệu từ HDFS và lưu model lên HDFS
 """
 from pyspark.sql import SparkSession
 from pyspark.ml.feature import VectorAssembler
@@ -7,12 +8,18 @@ from pyspark.ml.regression import RandomForestRegressor
 from pyspark.ml.evaluation import RegressionEvaluator
 from pyspark.ml import Pipeline
 import os
+import sys
+
+# Cấu hình HDFS
+HDFS_NAMENODE = os.getenv("HDFS_NAMENODE", "hdfs://192.168.80.148:9000")
+HDFS_DATA_DIR = os.getenv("HDFS_DATA_DIR", "/bigdata/house_prices")
+HDFS_MODEL_DIR = os.getenv("HDFS_MODEL_DIR", "/bigdata/house_prices/models")
 
 def train_model():
-    # Khởi tạo Spark Session
+    # Khởi tạo Spark Session với HDFS
     spark = SparkSession.builder \
         .appName("HousePriceModelTraining") \
-        .config("spark.hadoop.fs.defaultFS", "file:///") \
+        .config("spark.hadoop.fs.defaultFS", HDFS_NAMENODE) \
         .config("spark.local.dir", "/tmp/spark_local") \
         .config("spark.driver.memory", "4g") \
         .config("spark.executor.memory", "4g") \
@@ -23,10 +30,21 @@ def train_model():
     print("=" * 60)
     print("BẮT ĐẦU HUẤN LUYỆN MÔ HÌNH")
     print("=" * 60)
+    print(f"HDFS Namenode: {HDFS_NAMENODE}")
+    print(f"HDFS Data Dir: {HDFS_DATA_DIR}")
+    print(f"HDFS Model Dir: {HDFS_MODEL_DIR}")
     
-    # Đọc dữ liệu huấn luyện
-    data_path = os.path.abspath("data/train_data.csv")
-    df = spark.read.csv(f"file://{data_path}", header=True, inferSchema=True)
+    # Đọc dữ liệu huấn luyện từ HDFS
+    hdfs_train_path = f"{HDFS_DATA_DIR}/train_data.csv"
+    print(f"\n📂 Đang đọc dữ liệu từ HDFS: {hdfs_train_path}")
+    
+    try:
+        df = spark.read.csv(hdfs_train_path, header=True, inferSchema=True)
+    except Exception as e:
+        print(f"❌ Lỗi khi đọc dữ liệu từ HDFS: {e}")
+        print(f"💡 Đảm bảo đã upload dữ liệu lên HDFS bằng script upload_to_hdfs.py")
+        spark.stop()
+        sys.exit(1)
     
     print(f"\n✓ Đã đọc {df.count()} mẫu từ {data_path}")
     print("\nSchema:")
@@ -96,12 +114,20 @@ def train_model():
     print(f"R²:   {r2:.4f}")
     print("=" * 60)
     
-    # Lưu mô hình
-    model_path = "models/house_price_model"
-    os.makedirs("models", exist_ok=True)
-    model.write().overwrite().save(model_path)
+    # Lưu mô hình lên HDFS
+    hdfs_model_path = f"{HDFS_MODEL_DIR}/house_price_model"
+    print(f"\n💾 Đang lưu mô hình lên HDFS: {hdfs_model_path}")
     
-    print(f"\n✓ Đã lưu mô hình vào: {model_path}")
+    try:
+        model.write().overwrite().save(hdfs_model_path)
+        print(f"✓ Đã lưu mô hình vào HDFS: {hdfs_model_path}")
+    except Exception as e:
+        print(f"❌ Lỗi khi lưu mô hình lên HDFS: {e}")
+        # Fallback: lưu local nếu HDFS lỗi
+        local_model_path = "models/house_price_model"
+        os.makedirs("models", exist_ok=True)
+        model.write().overwrite().save(local_model_path)
+        print(f"⚠️  Đã lưu mô hình local (fallback): {local_model_path}")
     
     # Hiển thị một số dự đoán mẫu
     print("\nMột số dự đoán mẫu:")

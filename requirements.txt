@@ -5,6 +5,8 @@ scikit-learn>=1.0.0
 kafka-python>=2.0.0
 matplotlib>=3.5.0
 numpy>=1.21.0
+flask>=2.0.0
+pika>=1.3.0
 
 # Airflow (nếu chạy Airflow local)
 # apache-airflow>=2.7.0

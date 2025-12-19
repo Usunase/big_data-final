@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dự Đoán Giá Nhà - House Price Prediction</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            max-width: 900px;
+            width: 100%;
+            padding: 40px;
+            animation: fadeIn 0.5s ease-in;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(-20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        h1 {
+            color: #667eea;
+            text-align: center;
+            margin-bottom: 10px;
+            font-size: 2.5em;
+        }
+
+        .subtitle {
+            text-align: center;
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 1.1em;
+        }
+
+        .form-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .form-group {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .form-group.full-width {
+            grid-column: 1 / -1;
+        }
+
+        label {
+            color: #333;
+            font-weight: 600;
+            margin-bottom: 8px;
+            font-size: 0.95em;
+        }
+
+        input[type="number"] {
+            padding: 12px 15px;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            font-size: 1em;
+            transition: all 0.3s ease;
+            background: #f8f9fa;
+        }
+
+        input[type="number"]:focus {
+            outline: none;
+            border-color: #667eea;
+            background: white;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        .input-hint {
+            font-size: 0.85em;
+            color: #888;
+            margin-top: 5px;
+        }
+
+        .btn-container {
+            text-align: center;
+            margin-top: 30px;
+        }
+
+        .btn-predict {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 15px 50px;
+            font-size: 1.1em;
+            font-weight: 600;
+            border-radius: 50px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-predict:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);
+        }
+
+        .btn-predict:active {
+            transform: translateY(0);
+        }
+
+        .btn-predict:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .result-container {
+            margin-top: 30px;
+            padding: 25px;
+            border-radius: 15px;
+            display: none;
+            animation: slideDown 0.5s ease-out;
+        }
+
+        @keyframes slideDown {
+            from {
+                opacity: 0;
+                transform: translateY(-10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .result-container.show {
+            display: block;
+        }
+
+        .result-container.success {
+            background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+            color: white;
+        }
+
+        .result-container.error {
+            background: linear-gradient(135deg, #eb3349 0%, #f45c43 100%);
+            color: white;
+        }
+
+        .result-title {
+            font-size: 1.3em;
+            font-weight: 600;
+            margin-bottom: 15px;
+        }
+
+        .result-price {
+            font-size: 2.5em;
+            font-weight: bold;
+            text-align: center;
+            margin: 20px 0;
+            text-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+        }
+
+        .result-details {
+            background: rgba(255, 255, 255, 0.2);
+            padding: 15px;
+            border-radius: 10px;
+            margin-top: 15px;
+        }
+
+        .result-details p {
+            margin: 8px 0;
+            font-size: 0.95em;
+        }
+
+        .loading {
+            display: none;
+            text-align: center;
+            margin-top: 20px;
+        }
+
+        .loading.show {
+            display: block;
+        }
+
+        .spinner {
+            border: 4px solid rgba(102, 126, 234, 0.1);
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .info-box {
+            background: #e3f2fd;
+            border-left: 4px solid #2196f3;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 25px;
+        }
+
+        .info-box p {
+            color: #1565c0;
+            font-size: 0.9em;
+            line-height: 1.6;
+        }
+
+        @media (max-width: 768px) {
+            .form-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .container {
+                padding: 25px;
+            }
+
+            h1 {
+                font-size: 2em;
+            }
+
+            .result-price {
+                font-size: 2em;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🏠 Dự Đoán Giá Nhà</h1>
+        <p class="subtitle">Hệ thống dự đoán giá nhà sử dụng Machine Learning với Spark ML</p>
+
+        <div class="info-box">
+            <p><strong>📊 Thông tin:</strong> Hệ thống sử dụng mô hình Random Forest đã được huấn luyện để dự đoán giá nhà dựa trên các đặc trưng về vị trí và đặc điểm của ngôi nhà. Giá dự đoán được tính bằng đơn vị trăm nghìn USD.</p>
+        </div>
+
+        <form id="predictionForm">
+            <div class="form-grid">
+                <div class="form-group">
+                    <label for="MedInc">📈 Thu nhập trung bình (MedInc)</label>
+                    <input type="number" id="MedInc" name="MedInc" step="0.01" min="0" required>
+                    <span class="input-hint">Ví dụ: 3.5</span>
+                </div>
+
+                <div class="form-group">
+                    <label for="HouseAge">🏗️ Tuổi nhà (HouseAge)</label>
+                    <input type="number" id="HouseAge" name="HouseAge" step="0.1" min="0" required>
+                    <span class="input-hint">Ví dụ: 30.0</span>
+                </div>
+
+                <div class="form-group">
+                    <label for="AveRooms">🚪 Số phòng trung bình (AveRooms)</label>
+                    <input type="number" id="AveRooms" name="AveRooms" step="0.01" min="0" required>
+                    <span class="input-hint">Ví dụ: 5.5</span>
+                </div>
+
+                <div class="form-group">
+                    <label for="AveBedrms">🛏️ Số phòng ngủ trung bình (AveBedrms)</label>
+                    <input type="number" id="AveBedrms" name="AveBedrms" step="0.01" min="0" required>
+                    <span class="input-hint">Ví dụ: 1.0</span>
+                </div>
+
+                <div class="form-group">
+                    <label for="Population">👥 Dân số (Population)</label>
+                    <input type="number" id="Population" name="Population" step="1" min="0" required>
+                    <span class="input-hint">Ví dụ: 2000</span>
+                </div>
+
+                <div class="form-group">
+                    <label for="AveOccup">🏘️ Mật độ cư trú trung bình (AveOccup)</label>
+                    <input type="number" id="AveOccup" name="AveOccup" step="0.01" min="0" required>
+                    <span class="input-hint">Ví dụ: 3.0</span>
+                </div>
+
+                <div class="form-group">
+                    <label for="Latitude">🌍 Vĩ độ (Latitude)</label>
+                    <input type="number" id="Latitude" name="Latitude" step="0.01" required>
+                    <span class="input-hint">Ví dụ: 34.05</span>
+                </div>
+
+                <div class="form-group">
+                    <label for="Longitude">🌎 Kinh độ (Longitude)</label>
+                    <input type="number" id="Longitude" name="Longitude" step="0.01" required>
+                    <span class="input-hint">Ví dụ: -118.24</span>
+                </div>
+            </div>
+
+            <div class="btn-container">
+                <button type="submit" class="btn-predict" id="predictBtn">
+                    🔮 Dự Đoán Giá Nhà
+                </button>
+            </div>
+        </form>
+
+        <div class="loading" id="loading">
+            <div class="spinner"></div>
+            <p style="margin-top: 10px; color: #667eea;">Đang xử lý dự đoán...</p>
+        </div>
+
+        <div class="result-container" id="resultContainer">
+            <div class="result-title" id="resultTitle"></div>
+            <div class="result-price" id="resultPrice"></div>
+            <div class="result-details" id="resultDetails"></div>
+        </div>
+    </div>
+
+    <script>
+        const form = document.getElementById('predictionForm');
+        const predictBtn = document.getElementById('predictBtn');
+        const loading = document.getElementById('loading');
+        const resultContainer = document.getElementById('resultContainer');
+        const resultTitle = document.getElementById('resultTitle');
+        const resultPrice = document.getElementById('resultPrice');
+        const resultDetails = document.getElementById('resultDetails');
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            // Disable button and show loading
+            predictBtn.disabled = true;
+            loading.classList.add('show');
+            resultContainer.classList.remove('show');
+
+            // Get form data
+            const formData = new FormData(form);
+            const data = {};
+            formData.forEach((value, key) => {
+                data[key] = parseFloat(value);
+            });
+
+            try {
+                const response = await fetch('/predict', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(data)
+                });
+
+                const result = await response.json();
+
+                // Hide loading
+                loading.classList.remove('show');
+                predictBtn.disabled = false;
+
+                if (result.success) {
+                    // Show success result
+                    resultContainer.className = 'result-container success show';
+                    resultTitle.textContent = '✅ Dự đoán thành công!';
+                    resultPrice.textContent = result.formatted_price;
+                    
+                    const details = `
+                        <p><strong>Giá dự đoán (đơn vị gốc):</strong> ${result.predicted_price.toFixed(4)} trăm nghìn USD</p>
+                        <p><strong>Giá dự đoán (USD):</strong> ${result.formatted_price}</p>
+                        <p style="margin-top: 10px; font-size: 0.9em; opacity: 0.9;">
+                            💡 Lưu ý: Đây là giá trị dự đoán dựa trên mô hình Machine Learning. 
+                            Giá thực tế có thể khác tùy thuộc vào nhiều yếu tố khác.
+                        </p>
+                    `;
+                    resultDetails.innerHTML = details;
+                } else {
+                    // Show error result
+                    resultContainer.className = 'result-container error show';
+                    resultTitle.textContent = '❌ Lỗi';
+                    resultPrice.textContent = '';
+                    resultDetails.innerHTML = `<p>${result.error || 'Có lỗi xảy ra khi dự đoán'}</p>`;
+                }
+            } catch (error) {
+                // Hide loading
+                loading.classList.remove('show');
+                predictBtn.disabled = false;
+
+                // Show error
+                resultContainer.className = 'result-container error show';
+                resultTitle.textContent = '❌ Lỗi kết nối';
+                resultPrice.textContent = '';
+                resultDetails.innerHTML = `<p>Không thể kết nối đến server. Vui lòng thử lại sau.</p>`;
+            }
+        });
+    </script>
+</body>
+</html>
+

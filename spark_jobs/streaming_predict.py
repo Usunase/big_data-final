@@ -1,6 +1,6 @@
 """
 Spark Structured Streaming job - Đọc từ Kafka, dự đoán và gửi lại kết quả
-ĐÃ SỬA: Thêm timeout để tự động dừng sau khi xử lý xong
+Đọc model từ HDFS
 """
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import from_json, col, to_json, struct
@@ -8,15 +8,21 @@ from pyspark.sql.types import StructType, StructField, StringType, DoubleType, I
 from pyspark.ml import PipelineModel
 import time
 import sys
+import os
+
+# Cấu hình HDFS
+HDFS_NAMENODE = os.getenv("HDFS_NAMENODE", "hdfs://192.168.80.148:9000")
+HDFS_MODEL_DIR = os.getenv("HDFS_MODEL_DIR", "/bigdata/house_prices/models")
+KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "192.168.80.127:9092")
 
 def streaming_prediction():
-    # Khởi tạo Spark Session
+    # Khởi tạo Spark Session với HDFS
     spark = SparkSession.builder \
         .appName("HousePriceStreamingPrediction") \
         .config("spark.driver.memory", "4g") \
         .config("spark.executor.memory", "4g") \
         .config("spark.jars.packages", "org.apache.spark:spark-sql-kafka-0-10_2.13:4.0.0") \
-        .config("spark.hadoop.fs.defaultFS", "file:///") \
+        .config("spark.hadoop.fs.defaultFS", HDFS_NAMENODE) \
         .config("spark.hadoop.fs.hdfs.impl", "org.apache.hadoop.hdfs.DistributedFileSystem") \
         .getOrCreate()
 
@@ -26,17 +32,27 @@ def streaming_prediction():
     print("=" * 60)
     print("SPARK STREAMING - DỰ ĐOÁN GIÁ NHÀ")
     print("=" * 60)
+    print(f"HDFS Namenode: {HDFS_NAMENODE}")
+    print(f"HDFS Model Dir: {HDFS_MODEL_DIR}")
     
-    # Load mô hình đã huấn luyện
-    model_path = "models/house_price_model"
-    print(f"📂 Đang tải mô hình từ: {model_path}")
+    # Load mô hình đã huấn luyện từ HDFS
+    hdfs_model_path = f"{HDFS_MODEL_DIR}/house_price_model"
+    print(f"📂 Đang tải mô hình từ HDFS: {hdfs_model_path}")
     try:
-        model = PipelineModel.load(model_path)
-        print("✓ Đã tải mô hình thành công")
+        model = PipelineModel.load(hdfs_model_path)
+        print("✓ Đã tải mô hình thành công từ HDFS")
     except Exception as e:
-        print(f"❌ Lỗi khi tải mô hình: {e}")
-        spark.stop()
-        sys.exit(1)
+        print(f"❌ Lỗi khi tải mô hình từ HDFS: {e}")
+        # Fallback: thử load từ local
+        local_model_path = "models/house_price_model"
+        print(f"⚠️  Thử tải từ local: {local_model_path}")
+        try:
+            model = PipelineModel.load(local_model_path)
+            print("✓ Đã tải mô hình từ local (fallback)")
+        except Exception as e2:
+            print(f"❌ Lỗi khi tải mô hình từ local: {e2}")
+            spark.stop()
+            sys.exit(1)
     
     # Schema cho dữ liệu từ Kafka
     schema = StructType([
@@ -53,11 +69,12 @@ def streaming_prediction():
     ])
     
     # Đọc dữ liệu từ Kafka
-    print("📥 Đang kết nối đến Kafka topic: house-prices-input")
+    print(f"📥 Đang kết nối đến Kafka: {KAFKA_BOOTSTRAP_SERVERS}")
+    print("📥 Topic: house-prices-input")
     df_stream = (
-        spark.readStream
+        spark.readStream 
         .format("kafka")
-        .option("kafka.bootstrap.servers", "192.168.80.127:9092")
+        .option("kafka.bootstrap.servers", KAFKA_BOOTSTRAP_SERVERS)
         .option("subscribe", "house-prices-input")
         .option("startingOffsets", "earliest")
         .option("failOnDataLoss", "false")  # không fail nếu offset bị lùi/reset
@@ -90,7 +107,7 @@ def streaming_prediction():
     query = (
         kafka_output.writeStream
         .format("kafka")
-        .option("kafka.bootstrap.servers", "192.168.80.127:9092")
+        .option("kafka.bootstrap.servers", KAFKA_BOOTSTRAP_SERVERS)
         .option("topic", "house-prices-output")
         .option("checkpointLocation", "/tmp/checkpoint-house-prices-output")
         .start()

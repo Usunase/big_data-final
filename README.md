@@ -6,6 +6,17 @@ Dự án này triển khai một pipeline học máy end-to-end sử dụng Spar
 - Dự đoán real-time với Spark Streaming
 - Trực quan hóa kết quả
 
+## 🚀 Quick Start
+
+**Hệ thống phân tán với Hadoop HDFS và RabbitMQ (không dùng SSH, chỉ dùng hostname)**
+
+👉 **Xem [QUICK_START.md](QUICK_START.md) để bắt đầu nhanh**
+
+Hoặc xem hướng dẫn chi tiết:
+- **[SETUP_GUIDE.md](SETUP_GUIDE.md)**: Hướng dẫn setup từng bước với hostname
+- **[README_HADOOP_RABBITMQ.md](README_HADOOP_RABBITMQ.md)**: Tổng quan hệ thống phân tán
+- **[RABBITMQ_CONFIG.md](RABBITMQ_CONFIG.md)**: Cấu hình RabbitMQ chi tiết
+
 ## 📋 Yêu cầu hệ thống
 
 - Python 3.9+

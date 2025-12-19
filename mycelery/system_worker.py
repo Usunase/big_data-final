@@ -2,9 +2,11 @@ from celery import Celery
 import subprocess
 import os
 
+# Sử dụng RabbitMQ làm broker thay vì Redis
+# Format: amqp://username:password@host:port/vhost
 app = Celery(
     'system_worker',
-    broker='redis://192.168.80.148:6379/0',
+    broker='amqp://guest:guest@localhost:5672//',
     backend='db+postgresql://airflow:airflow@192.168.80.148/airflow'
 )
 

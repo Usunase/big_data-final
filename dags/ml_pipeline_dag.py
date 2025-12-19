@@ -1,541 +1,334 @@
+"""
+Airflow DAG cho hệ thống phân tán (không dùng SSH)
+- Machine 1 (Airflow + RabbitMQ): Orchestrator
+- Machine 2 (192.168.80.127): Kafka cluster (Celery queue: node_57)
+- Machine 3 (192.168.80.207): Spark cluster (Celery queue: spark)
+"""
 from airflow import DAG
-from airflow.providers.standard.operators.python import PythonOperator
-from airflow.sdk import Param
-from datetime import datetime
+try:
+    from airflow.providers.standard.operators.bash import BashOperator
+    from airflow.providers.standard.operators.python import PythonOperator
+except ImportError:
+    from airflow.operators.bash import BashOperator
+    from airflow.operators.python import PythonOperator
+
+from datetime import datetime, timedelta
 import time
+import socket
 
-# Import tasks từ system_worker
-from mycelery.system_worker import (
-    run_command,
-    docker_run,
-    docker_stop,
-    docker_remove,
-    docker_ps,
-    docker_compose_up,
-    docker_compose_down,
-    docker_compose_ps,
-    docker_compose_logs
-)
+from mycelery.system_worker import docker_compose_up, run_command
+
+# ========================================
+# CẤU HÌNH HỆ THỐNG PHÂN TÁN
+# ========================================
+KAFKA_HOST, KAFKA_PORT = "192.168.80.127", 9092
+SPARK_HOST = "192.168.80.207"
+SPARK_MASTER = f"spark://{SPARK_HOST}:7077"
+PROJECT_DIR = "/home/haminhchien/Documents/bigdata/final_project"
+
+# Queue mapping (khớp với CLUSTER_NODES trong system_worker.py)
+KAFKA_QUEUE = "node_57"
+SPARK_QUEUE = "spark"
+
+default_args = {
+    'owner': 'airflow',
+    'depends_on_past': False,
+    'start_date': datetime(2024, 1, 1),
+    'email_on_failure': False,
+    'email_on_retry': False,
+    'retries': 1,
+    'retry_delay': timedelta(minutes=5),
+}
 
 
-def wait_for_celery_result(result, timeout=60, poll_interval=2):
+def check_remote_ready(host, port, name, max_retries=10, delay=5):
+    """Kiểm tra service TCP đã sẵn sàng (Kafka/Spark)"""
+    print(f"🔍 Kiểm tra {name} tại {host}:{port}")
+    for i in range(max_retries):
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                if sock.connect_ex((host, port)) == 0:
+                    print(f"✓ {name} đã sẵn sàng tại {host}:{port}!")
+                    return True
+            print(f"⏳ Chờ {name}... (lần {i+1}/{max_retries})")
+        except Exception as e:
+            print(f"❌ Lỗi khi kiểm tra {name}: {e}")
+        time.sleep(delay)
+    raise Exception(f"{name} không sẵn sàng tại {host}:{port}")
+
+
+def check_kafka_ready(**_):
+    return check_remote_ready(KAFKA_HOST, KAFKA_PORT, "Kafka", max_retries=30, delay=10)
+
+
+def check_spark_ready(**_):
+    return check_remote_ready(SPARK_HOST, 7077, "Spark Master")
+
+
+def wait_for_streaming_complete(**kwargs):
+    """Đợi streaming hoàn thành (hoặc timeout)"""
+    print("⏳ Đợi 5 phút để streaming xử lý dữ liệu...")
+    time.sleep(300)  # 5 phút
+    print("✓ Hoàn thành thời gian streaming")
+
+
+def wait_for_celery_result(result, timeout=600, poll_interval=5):
+    """Đợi Celery task hoàn thành qua RabbitMQ"""
     elapsed = 0
     while elapsed < timeout:
         if result.ready():
             if result.successful():
                 return result.result
-            else:
-                raise Exception(f"Celery task failed: {result.result}")
+            raise Exception(f"Celery task failed: {result.result}")
         time.sleep(poll_interval)
         elapsed += poll_interval
-
-    raise TimeoutError(f"Celery task {result.id} timed out after {timeout} seconds")
-
-
-# ============== TASK FUNCTIONS ==============
-
-def task_docker_run(**context):
-    params = context['params']
-    image = params.get('image', 'hello-world')
-    container_name = params.get('container_name', None)
-    ports = params.get('ports', None)
-
-    if ports and isinstance(ports, str) and ports.strip():
-        ports = [p.strip() for p in ports.split(',')]
-    else:
-        ports = None
-
-    result = docker_run.delay(image, container_name, ports)
-    return {'task_id': result.id, 'image': image}
+    raise TimeoutError(f"Celery task {result.id} timed out sau {timeout} giây")
 
 
-def task_docker_stop(**context):
-    params = context['params']
-    container_name = params.get('container_name', '')
+def start_kafka_via_celery(**context):
+    """
+    Khởi động Kafka cluster trên node Kafka thông qua Celery/RabbitMQ
+    Giả định có docker-compose kafka trên node, ví dụ: ~/kafka-cluster/docker-compose.yml
+    """
+    compose_path = "~/kafka-cluster/docker-compose.yml"
+    print(f"🚀 Gửi lệnh docker-compose up Kafka tới queue '{KAFKA_QUEUE}'")
 
-    result = docker_stop.delay(container_name)
-    return {'task_id': result.id, 'container_name': container_name}
+    result = docker_compose_up.apply_async(
+        args=[compose_path],
+        kwargs={
+            "services": None,
+            "detach": True,
+            "build": False,
+            "force_recreate": False,
+        },
+        queue=KAFKA_QUEUE,
+    )
 
-
-def task_docker_remove(**context):
-    params = context['params']
-    container_name = params.get('container_name', '')
-
-    result = docker_remove.delay(container_name)
-    return {'task_id': result.id, 'container_name': container_name}
-
-
-def task_docker_ps(**context):
-    params = context['params']
-    all_containers = params.get('all_containers', False)
-
-    result = docker_ps.delay(all_containers)
-    return {'task_id': result.id}
-
-
-def task_docker_compose_up(**context):
-    params = context['params']
-    path = params.get('compose_path', '/path/to/docker-compose.yml')
-    services = params.get('services', None)
-    detach = params.get('detach', True)
-    build = params.get('build', False)
-    force_recreate = params.get('force_recreate', False)
-
-    if services and isinstance(services, str) and services.strip():
-        services = [s.strip() for s in services.split(',')]
-    else:
-        services = None
-
-    result = docker_compose_up.delay(path, services, detach, build, force_recreate)
-    return {'task_id': result.id, 'compose_path': path, 'services': services}
+    output = wait_for_celery_result(result, timeout=600)
+    print("✓ Kafka cluster đã được start qua Celery/RabbitMQ")
+    return {
+        "task_id": result.id,
+        "queue": KAFKA_QUEUE,
+        "compose_path": compose_path,
+        "output": output,
+    }
 
 
-def task_docker_compose_down(**context):
-    params = context['params']
-    path = params.get('compose_path', '/path/to/docker-compose.yml')
-    services = params.get('services', None)
-    volumes = params.get('remove_volumes', False)
-    remove_orphans = params.get('remove_orphans', False)
+def ensure_kafka_output_topic_via_celery(**context):
+    """
+    Đảm bảo Kafka topic house-prices-output tồn tại bằng cách chạy lệnh trên node Kafka
+    """
+    cmd = (
+        "docker exec kafka kafka-topics --bootstrap-server localhost:9092 "
+        "--create --if-not-exists --topic house-prices-output --replication-factor 1 --partitions 1 && "
+        "docker exec kafka kafka-topics --bootstrap-server localhost:9092 --describe --topic house-prices-output"
+    )
+    print(f"🚀 Gửi lệnh tạo Kafka topic output tới queue '{KAFKA_QUEUE}'")
 
-    if services and isinstance(services, str) and services.strip():
-        services = [s.strip() for s in services.split(',')]
-    else:
-        services = None
+    result = run_command.apply_async(
+        args=[cmd],
+        kwargs={},
+        queue=KAFKA_QUEUE,
+    )
 
-    result = docker_compose_down.delay(path, services, volumes, remove_orphans)
-    return {'task_id': result.id, 'compose_path': path, 'services': services}
-
-
-def task_docker_compose_ps(**context):
-    params = context['params']
-    path = params.get('compose_path', '/path/to/docker-compose.yml')
-
-    result = docker_compose_ps.delay(path)
-    return {'task_id': result.id, 'compose_path': path}
-
-
-def task_docker_compose_logs(**context):
-    params = context['params']
-    path = params.get('compose_path', '/path/to/docker-compose.yml')
-    service = params.get('service', None)
-    tail = params.get('tail', 100)
-
-    if service and isinstance(service, str) and not service.strip():
-        service = None
-
-    result = docker_compose_logs.delay(path, service, tail)
-    return {'task_id': result.id, 'compose_path': path}
+    output = wait_for_celery_result(result, timeout=300)
+    print("✓ Kafka topic house-prices-output đã được đảm bảo qua Celery/RabbitMQ")
+    return {
+        "task_id": result.id,
+        "queue": KAFKA_QUEUE,
+        "command": cmd,
+        "output": output,
+    }
 
 
-# ============== DAG 4: Docker Compose Stop ==============
+def start_spark_via_celery(**context):
+    """
+    Khởi động Spark master/worker trên node Spark thông qua Celery/RabbitMQ
+    Giả định có docker-compose Spark trên node, ví dụ: ~/docker-spark/docker-compose.yml
+    """
+    compose_path = "~/docker-spark/docker-compose.yml"
+    print(f"🚀 Gửi lệnh docker-compose up Spark tới queue '{SPARK_QUEUE}'")
 
+    result = docker_compose_up.apply_async(
+        args=[compose_path],
+        kwargs={
+            "services": ["spark-master", "spark-worker"],
+            "detach": True,
+            "build": False,
+            "force_recreate": False,
+        },
+        queue=SPARK_QUEUE,
+    )
+
+    output = wait_for_celery_result(result, timeout=600)
+    print("✓ Spark cluster đã được start qua Celery/RabbitMQ")
+    return {
+        "task_id": result.id,
+        "queue": SPARK_QUEUE,
+        "compose_path": compose_path,
+        "output": output,
+    }
+
+
+# ========================================
+# DAG CHÍNH
+# ========================================
 with DAG(
-    dag_id='docker_compose_stop',
-    description='DAG dừng Docker Compose services',
-    start_date=datetime(2024, 1, 1),
+    'ml_streaming_pipeline_distributed',
+    default_args=default_args,
+    description='Distributed ML pipeline: Airflow -> Kafka/Spark qua RabbitMQ (không dùng SSH)',
     schedule=None,
     catchup=False,
-    tags=['docker', 'compose', 'stop'],
-    params={
-        'compose_path': Param('~/bd/spark/docker-compose.yml', type='string', description='Đường dẫn file docker-compose.yml'),
-        'services': Param('', type='string', description='Services cần dừng (vd: spark-master,spark-worker). Để trống = tất cả'),
-        'remove_volumes': Param(False, type='boolean', description='Xóa volumes'),
-        'remove_orphans': Param(False, type='boolean', description='Xóa orphan containers'),
-    }
-) as dag_compose_stop:
+    tags=['distributed', 'machine-learning', 'kafka', 'spark'],
+) as dag:
 
-    def task_compose_stop(**context):
-        params = context['params']
-        path = params.get('compose_path')
-        services = params.get('services', None)
-        volumes = params.get('remove_volumes', False)
-        remove_orphans = params.get('remove_orphans', False)
-
-        if services and isinstance(services, str) and services.strip():
-            services = [s.strip() for s in services.split(',')]
-        else:
-            services = None
-
-        result = docker_compose_down.delay(path, services, volumes, remove_orphans)
-        return {'task_id': result.id, 'compose_path': path, 'services': services}
-
-    stop_compose_task = PythonOperator(
-        task_id='stop_docker_compose',
-        python_callable=task_compose_stop,
+    # Task 1: Khởi động Kafka trên máy remote qua Celery/RabbitMQ
+    start_kafka_remote = PythonOperator(
+        task_id='start_kafka_via_celery',
+        python_callable=start_kafka_via_celery,
     )
 
-
-# ============== DAG 5: Big Data Pipeline ==============
-# Pipeline chạy trên nhiều node khác nhau
-
-BIGDATA_SERVICES = {
-    'spark-master': {
-        'host': '192.168.80.207',
-        'queue': 'spark',
-        'path': '~/bd/spark/docker-compose.yml',
-        'service': 'spark-master',
-    },
-    'spark-worker': {
-        'host': '192.168.80.207',
-        'queue': 'spark',
-        'path': '~/bd/spark/docker-compose.yml',
-        'service': 'spark-worker',
-    },
-    'hadoop-namenode': {
-        'host': '192.168.80.148',
-        'queue': 'node_57',
-        'path': '~/bd/hadoop/docker-compose.namenode.yml',
-        'service': None,
-    },
-    'hadoop-datanode': {
-        'host': '192.168.80.148',
-        'queue': 'node_57',
-        'path': '~/bd/hadoop/docker-compose.datanode.yml',
-        'service': None,
-    },
-    'kafka': {
-        'host': '192.168.80.127',
-        'queue': 'node_57',
-        'path': '~/kafka-cluster/docker-compose.yml',
-        'service': None,
-    },
-}
-
-
-with DAG(
-    dag_id='bigdata_pipeline_start',
-    description='full path from start dockers to submit to Spark',
-    start_date=datetime(2024, 1, 1),
-    schedule=None,
-    catchup=False,
-    tags=['bigdata', 'pipeline', 'start'],
-    params={
-        'start_hadoop': Param(True, type='boolean', description='Khởi động Hadoop (Namenode + Datanode)'),
-        'start_spark': Param(True, type='boolean', description='Khởi động Spark (Master + Worker)'),
-        'start_kafka': Param(True, type='boolean', description='Khởi động Kafka'),
-    }
-) as dag_bigdata_start:
-
-    def start_service(service_name, timeout=300, **context):
-        config = BIGDATA_SERVICES[service_name]
-
-        result = docker_compose_up.apply_async(
-            args=[config['path']],
-            kwargs={
-                'services': config['service'],
-                'detach': True,
-                'build': False,
-                'force_recreate': False,
-            },
-            queue=config['queue']
-        )
-
-        try:
-            output = wait_for_celery_result(result, timeout=timeout)
-            return {
-                'task_id': result.id,
-                'service': service_name,
-                'host': config['host'],
-                'queue': config['queue'],
-                'output': output,
-                'status': 'success'
-            }
-        except Exception as e:
-            raise Exception(f"Failed to start {service_name} on {config['host']}: {str(e)}")
-
-    def start_hadoop_namenode(**context):
-        if not context['params'].get('start_hadoop', True):
-            return {'skipped': True}
-        return start_service('hadoop-namenode', **context)
-
-    def start_hadoop_datanode(**context):
-        if not context['params'].get('start_hadoop', True):
-            return {'skipped': True}
-        return start_service('hadoop-datanode', **context)
-
-    def start_spark_master(**context):
-        if not context['params'].get('start_spark', True):
-            return {'skipped': True}
-        return start_service('spark-master', **context)
-
-    def start_spark_worker(**context):
-        if not context['params'].get('start_spark', True):
-            return {'skipped': True}
-        return start_service('spark-worker', **context)
-
-    def start_kafka(**context):
-        if not context['params'].get('start_kafka', True):
-            return {'skipped': True}
-        return start_service('kafka', **context)
-
-    def prepare_data(**context):
-        if not context['params'].get('start_spark', True):
-            return {'skipped': True}
-
-        command = "sh ~/bd/fp_pr_tasks/credit_card/exes/prepare.sh"
-        queue = 'spark'
-        host = '192.168.80.207'
-
-        env_vars = {
-            'JAVA_HOME': '/usr/lib/jvm/java-17-openjdk-amd64',
-            'PATH': '/usr/lib/jvm/java-17-openjdk-amd64/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
-        }
-
-        result = run_command.apply_async(
-            args=[command],
-            kwargs={'env_vars': env_vars},
-            queue=queue
-        )
-
-        try:
-            output = wait_for_celery_result(result, timeout=600)
-            return {
-                'task_id': result.id,
-                'command': command,
-                'host': host,
-                'output': output,
-                'status': 'success'
-            }
-        except Exception as e:
-            raise Exception(f"Failed to submit spark job on {host}: {str(e)}")
-
-    def train_model(**context):
-        if not context['params'].get('start_spark', True):
-            return {'skipped': True}
-
-        command = "sh ~/bd/fp_pr_tasks/credit_card/exes/train.sh"
-        queue = 'spark'
-        host = '192.168.80.207'
-
-        env_vars = {
-            'JAVA_HOME': '/usr/lib/jvm/java-17-openjdk-amd64',
-            'PATH': '/usr/lib/jvm/java-17-openjdk-amd64/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
-        }
-
-        result = run_command.apply_async(
-            args=[command],
-            kwargs={'env_vars': env_vars},
-            queue=queue
-        )
-
-        try:
-            output = wait_for_celery_result(result, timeout=600)
-            return {
-                'task_id': result.id,
-                'command': command,
-                'host': host,
-                'output': output,
-                'status': 'success'
-            }
-        except Exception as e:
-            raise Exception(f"Failed to submit spark job on {host}: {str(e)}")
-
-    def streaming_data(**context):
-        if not context['params'].get('start_spark', True):
-            return {'skipped': True}
-
-        command = 'sh ~/bd/fp_pr_tasks/credit_card/exes/producer.sh'
-        queue = 'spark'
-        host = '192.168.80.207'
-
-        env_vars = {
-            'JAVA_HOME': '/usr/lib/jvm/java-17-openjdk-amd64',
-            'PATH': '/usr/lib/jvm/java-17-openjdk-amd64/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
-        }
-
-        result = run_command.apply_async(
-            args=[command],
-            kwargs={'env_vars': env_vars},
-            queue=queue
-        )
-
-        try:
-            output = wait_for_celery_result(result, timeout=600)
-            return {
-                'task_id': result.id,
-                'command': command,
-                'host': host,
-                'output': output,
-                'status': 'success'
-            }
-        except Exception as e:
-            raise Exception(f"Failed to submit spark job on {host}: {str(e)}")
-
-    def predict(**context):
-        if not context['params'].get('start_spark', True):
-            return {'skipped': True}
-
-        command = 'sh ~/bd/fp_pr_tasks/credit_card/exes/predict.sh'
-        queue = 'spark'
-        host = '192.168.80.207'
-
-        env_vars = {
-            'JAVA_HOME': '/usr/lib/jvm/java-17-openjdk-amd64',
-            'PATH': '/usr/lib/jvm/java-17-openjdk-amd64/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
-        }
-
-        result = run_command.apply_async(
-            args=[command],
-            kwargs={'env_vars': env_vars},
-            queue=queue
-        )
-
-        try:
-            output = wait_for_celery_result(result, timeout=600)
-            return {
-                'task_id': result.id,
-                'command': command,
-                'host': host,
-                'output': output,
-                'status': 'success'
-            }
-        except Exception as e:
-            raise Exception(f"Failed to submit spark job on {host}: {str(e)}")
-
-    task_hadoop_namenode = PythonOperator(
-        task_id='start_hadoop_namenode',
-        python_callable=start_hadoop_namenode,
+    # Task 2: Kiểm tra Kafka đã sẵn sàng
+    check_kafka = PythonOperator(
+        task_id='check_kafka_remote',
+        python_callable=check_kafka_ready,
     )
 
-    task_hadoop_datanode = PythonOperator(
-        task_id='start_hadoop_datanode',
-        python_callable=start_hadoop_datanode,
+    # Task 2b: Đảm bảo Kafka topic output tồn tại qua Celery/RabbitMQ
+    ensure_kafka_output_topic = PythonOperator(
+        task_id='ensure_kafka_output_topic_via_celery',
+        python_callable=ensure_kafka_output_topic_via_celery,
     )
 
-    task_spark_master = PythonOperator(
-        task_id='start_spark_master',
-        python_callable=start_spark_master,
+    # Task 3: Khởi động Spark cluster trên máy remote qua Celery/RabbitMQ
+    start_spark_remote = PythonOperator(
+        task_id='start_spark_via_celery',
+        python_callable=start_spark_via_celery,
     )
 
-    task_spark_worker = PythonOperator(
-        task_id='start_spark_worker',
-        python_callable=start_spark_worker,
+    # Task 4: Kiểm tra Spark đã sẵn sàng
+    check_spark = PythonOperator(
+        task_id='check_spark_remote',
+        python_callable=check_spark_ready,
     )
 
-    task_kafka = PythonOperator(
-        task_id='start_kafka',
-        python_callable=start_kafka,
-    )
-
-    prepare_data = PythonOperator(
+    # Task 5: Chuẩn bị dữ liệu (local - trên máy Airflow)
+    prepare_data = BashOperator(
         task_id='prepare_data',
-        python_callable=prepare_data,
+        bash_command="""
+        cd {{ params.project_dir }}
+        if [ -f data/train_data.csv ]; then
+            echo "✓ Dữ liệu đã có sẵn"
+        else
+            echo "📊 Đang chuẩn bị dữ liệu..."
+            python data/prepare_data.py
+        fi
+        """,
+        params={'project_dir': PROJECT_DIR}
     )
 
-    train_model = PythonOperator(
+    # Task 6: Huấn luyện mô hình trên Spark cluster (Spark đã được start sẵn)
+    train_model = BashOperator(
         task_id='train_model',
-        python_callable=train_model,
+        bash_command="""
+        cd {{ params.project_dir }}
+        echo "🚀 Gửi training job đến Spark: {{ params.spark_master }}"
+        spark-submit \
+            --master {{ params.spark_master }} \
+            --conf spark.hadoop.fs.defaultFS=file:/// \
+            --conf spark.local.dir=/tmp/spark_local \
+            --driver-memory 4g \
+            --executor-memory 4g \
+            --num-executors 2 \
+            --executor-cores 2 \
+            spark_jobs/train_model.py
+        echo "✓ Training hoàn thành"
+        """,
+        params={'project_dir': PROJECT_DIR, 'spark_master': SPARK_MASTER}
     )
 
-    streaming_data = PythonOperator(
-        task_id='streaming_data',
-        python_callable=streaming_data,
+    # Task 7: Gửi dữ liệu streaming vào Kafka remote
+    send_streaming_data = BashOperator(
+        task_id='send_data_to_remote_kafka',
+        bash_command=f"""
+        cd {PROJECT_DIR}
+        echo "📤 Gửi dữ liệu vào Kafka: {KAFKA_HOST}:{KAFKA_PORT}"
+        python3 streaming/kafka_producer.py 1 200
+        echo "✓ Đã gửi 200 records vào Kafka"
+        """
     )
 
-    predict = PythonOperator(
-        task_id='predict',
-        python_callable=predict,
+    # Task 8: Khởi động Spark Streaming job (tự động dừng sau 2 phút)
+    start_streaming_job = BashOperator(
+        task_id='start_streaming_job',
+        bash_command="""
+        cd {{ params.project_dir }}
+        echo "🚀 Khởi động Spark Streaming job..."
+
+        # Xóa checkpoint cũ để đọc lại từ đầu (tránh giữ offset cũ làm trống output)
+        rm -rf /tmp/checkpoint /tmp/checkpoint-house-prices-output
+
+        # Chạy streaming job (foreground - đợi nó tự dừng)
+        spark-submit \
+            --master {{ params.spark_master }} \
+            --packages org.apache.spark:spark-sql-kafka-0-10_2.13:4.0.0 \
+            --driver-memory 4g \
+            --executor-memory 4g \
+            --num-executors 2 \
+            --executor-cores 2 \
+            spark_jobs/streaming_predict.py
+
+        echo "✓ Streaming job đã hoàn thành"
+        """,
+        params={
+            'project_dir': PROJECT_DIR,
+            'spark_master': SPARK_MASTER,
+        },
+        execution_timeout=timedelta(minutes=5)  # Timeout sau 5 phút
     )
 
-    task_hadoop_namenode >> task_hadoop_datanode
-    task_spark_master >> task_spark_worker
-    task_kafka
+    wait_processing = PythonOperator(
+        task_id='wait_for_streaming',
+        python_callable=wait_for_streaming_complete,
+    )
 
-    [task_hadoop_datanode, task_spark_worker, task_kafka] >> prepare_data >> train_model >> predict
-    [task_hadoop_datanode, task_spark_worker, task_kafka] >> prepare_data >> train_model >> streaming_data
+    cleanup = BashOperator(
+        task_id='cleanup',
+        bash_command="""
+        if [ -f /tmp/spark_streaming.pid ]; then
+            PID=$(cat /tmp/spark_streaming.pid)
+            echo "🛑 Đang dừng Spark Streaming job (PID: $PID)"
+            kill $PID 2>/dev/null || echo "Process đã dừng"
+            rm -rf /tmp/checkpoint /tmp/checkpoint-house-prices-output
+        fi
+        echo "✓ Hoàn thành pipeline"
+        """,
+        trigger_rule='all_done'  # Chạy dù task trước thành công hay thất bại
+    )
+
+    # Định nghĩa dependencies
+    start_kafka_remote >> check_kafka >> ensure_kafka_output_topic
+    start_spark_remote >> check_spark
+    [ensure_kafka_output_topic, check_spark] >> prepare_data >> train_model >> send_streaming_data >> start_streaming_job >> wait_processing >> cleanup
 
 
-# ============== DAG 6: Big Data Pipeline Stop ==============
+# ========================================
+# DAG VISUALIZATION
+# ========================================
 with DAG(
-    dag_id='bigdata_pipeline_stop',
-    description='Pipeline dừng Big Data cluster',
-    start_date=datetime(2024, 1, 1),
-    schedule=None,
+    'ml_streaming_visualization',
+    default_args=default_args,
+    description='Run visualization consumer',
+    schedule=None,  # Chạy manual
     catchup=False,
-    tags=['bigdata', 'pipeline', 'stop'],
-    params={
-        'stop_hadoop': Param(True, type='boolean', description='Dừng Hadoop'),
-        'stop_spark': Param(True, type='boolean', description='Dừng Spark'),
-        'stop_kafka': Param(True, type='boolean', description='Dừng Kafka'),
-        'remove_volumes': Param(False, type='boolean', description='Xóa volumes'),
-    }
-) as dag_bigdata_stop:
+    tags=['visualization', 'kafka'],
+) as dag_viz:
 
-    def stop_service(service_name, remove_volumes=False, timeout=300, **context):
-        config = BIGDATA_SERVICES[service_name]
-
-        result = docker_compose_down.apply_async(
-            args=[config['path']],
-            kwargs={
-                'services': config['service'],
-                'volumes': remove_volumes,
-                'remove_orphans': False,
-            },
-            queue=config['queue']
-        )
-
-        try:
-            output = wait_for_celery_result(result, timeout=timeout)
-            return {
-                'task_id': result.id,
-                'service': service_name,
-                'host': config['host'],
-                'output': output,
-                'status': 'success'
-            }
-        except Exception as e:
-            raise Exception(f"Failed to stop {service_name} on {config['host']}: {str(e)}")
-
-    def stop_kafka(**context):
-        if not context['params'].get('stop_kafka', True):
-            return {'skipped': True}
-        return stop_service('kafka', context['params'].get('remove_volumes', False), **context)
-
-    def stop_spark_worker(**context):
-        if not context['params'].get('stop_spark', True):
-            return {'skipped': True}
-        return stop_service('spark-worker', context['params'].get('remove_volumes', False), **context)
-
-    def stop_spark_master(**context):
-        if not context['params'].get('stop_spark', True):
-            return {'skipped': True}
-        return stop_service('spark-master', context['params'].get('remove_volumes', False), **context)
-
-    def stop_hadoop_datanode(**context):
-        if not context['params'].get('stop_hadoop', True):
-            return {'skipped': True}
-        return stop_service('hadoop-datanode', context['params'].get('remove_volumes', False), **context)
-
-    def stop_hadoop_namenode(**context):
-        if not context['params'].get('stop_hadoop', True):
-            return {'skipped': True}
-        return stop_service('hadoop-namenode', context['params'].get('remove_volumes', False), **context)
-
-    task_stop_kafka = PythonOperator(
-        task_id='stop_kafka',
-        python_callable=stop_kafka,
+    run_visualization = BashOperator(
+        task_id='run_visualization',
+        bash_command="""
+        cd {{ params.project_dir }} && \
+        python visualization/kafka_consumer.py
+        """,
+        params={'project_dir': PROJECT_DIR}
     )
-
-    task_stop_spark_worker = PythonOperator(
-        task_id='stop_spark_worker',
-        python_callable=stop_spark_worker,
-    )
-
-    task_stop_spark_master = PythonOperator(
-        task_id='stop_spark_master',
-        python_callable=stop_spark_master,
-    )
-
-    task_stop_hadoop_datanode = PythonOperator(
-        task_id='stop_hadoop_datanode',
-        python_callable=stop_hadoop_datanode,
-    )
-
-    task_stop_hadoop_namenode = PythonOperator(
-        task_id='stop_hadoop_namenode',
-        python_callable=stop_hadoop_namenode,
-    )
-
-    task_stop_hadoop_datanode >> task_stop_hadoop_namenode
-    task_stop_spark_worker >> task_stop_spark_master
-    task_stop_kafka
